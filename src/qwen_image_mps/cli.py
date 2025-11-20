@@ -673,10 +673,14 @@ def convert_pipeline_to_dtype(pipeline, torch_dtype):
 
     def _to_dtype(module):
         if module is not None and hasattr(module, "to"):
+            # Check if the module is quantized - skip dtype conversion for quantized models
+            if hasattr(module, 'config') and hasattr(module.config, 'quantization_config'):
+                # Module is quantized, do not change dtype
+                return module
             module = module.to(dtype=torch_dtype)
         return module
 
-    # Convert transformer
+    # Convert transformer (skip if quantized)
     if hasattr(pipeline, "transformer"):
         pipeline.transformer = _to_dtype(pipeline.transformer)
 
@@ -837,8 +841,8 @@ def load_gguf_pipeline(quantization: str, device, torch_dtype, edit_mode=False):
                         gguf_path,
                     )
 
-            # Convert dtype and move to device after loading
-            transformer = transformer.to(device=device, dtype=torch_dtype)
+            # Move to device after loading (do not change dtype for quantized models)
+            transformer = transformer.to(device=device)
 
             print("Creating pipeline with quantized transformer...")
 
@@ -847,9 +851,14 @@ def load_gguf_pipeline(quantization: str, device, torch_dtype, edit_mode=False):
                 transformer=transformer,
             )
 
-            pipeline = pipeline.to(device)
-            # Convert all components to desired dtype for MPS compatibility
-            pipeline = convert_pipeline_to_dtype(pipeline, torch_dtype)
+            # Move non-transformer components to device and convert dtype
+            # (transformer is already on device and quantized, so skip it)
+            if hasattr(pipeline, "text_encoder") and pipeline.text_encoder is not None:
+                pipeline.text_encoder = pipeline.text_encoder.to(device=device, dtype=torch_dtype)
+            if hasattr(pipeline, "text_encoder_2") and pipeline.text_encoder_2 is not None:
+                pipeline.text_encoder_2 = pipeline.text_encoder_2.to(device=device, dtype=torch_dtype)
+            if hasattr(pipeline, "vae") and pipeline.vae is not None:
+                pipeline.vae = pipeline.vae.to(device=device, dtype=torch_dtype)
 
             # Enable memory optimizations
             # pipeline.enable_attention_slicing(slice_size=1)
